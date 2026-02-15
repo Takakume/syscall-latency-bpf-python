@@ -19,8 +19,13 @@ struct start_t {
     u32 id;
 };
 
+struct key_t {
+    u32 id;
+    u32 pid;
+};
+
 BPF_HASH(start, u64, struct start_t);
-BPF_HASH(stats, u32, struct stats_t);
+BPF_HASH(stats, struct key_t, struct stats_t);
 
 static int trace_enter(struct pt_regs *ctx, u32 id)
 {
@@ -53,6 +58,8 @@ int trace_enter_fsync(struct pt_regs *ctx) {
 int trace_exit(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+
     struct start_t *sp = start.lookup(&pid_tgid);
     if (!sp)
         return 0;
@@ -62,8 +69,12 @@ int trace_exit(struct pt_regs *ctx)
 
     start.delete(&pid_tgid);
 
+    struct key_t key = {};
+    key.id = id;
+    key.pid = pid;
+
     struct stats_t zero = {};
-    struct stats_t *stat = stats.lookup_or_init(&id, &zero);
+    struct stats_t *stat = stats.lookup_or_init(&key, &zero);
 
     stat->count += 1;
     stat->total_ns += delta;
@@ -91,17 +102,22 @@ for name in SYSCALLS.keys():
 print("Tracing syscalls... Ctrl+C to stop.")
 
 def print_stats():
-    print("%-10s %-10s %-12s %-12s" % ("SYSCALL", "COUNT", "AVG(us)", "MAX(us)"))
     stats = b["stats"]
 
     for name, sid in SYSCALLS.items():
-        key = stats.Key(sid)
-        if key in stats:
-            v = stats[key]
+        print("\n" + name)
+        print("-" * 60)
+        print("%-10s %-10s %-12s %-12s" % ("PID", "COUNT", "AVG(us)", "MAX(us)"))
+
+        for k, v in stats.items():
+            if k.id != sid:
+                continue
+
             avg = (v.total_ns / v.count) / 1000
             max_us = v.max_ns / 1000
-            print("%-10s %-10d %-12.2f %-12.2f" %
-                  (name, v.count, avg, max_us))
+
+            print("%-10d %-10d %-12.2f %-12.2f" %
+                  (k.pid, v.count, avg, max_us))
 
 def signal_handler(sig, frame):
     print("\n")
