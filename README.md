@@ -2,33 +2,35 @@
 
 A minimal syscall latency profiler built with eBPF (BCC).
 
----
+------------------------------------------------------------------------
 
 ## Motivation
 
-When investigating performance issues, `perf` often produces noisy call stacks.
+When investigating performance issues, `perf` often produces noisy call
+stacks.
 
 In many cases, what we really want to know is:
 
-> **Which syscall is slow?**
+> **Which syscall is slow, and which process is causing it?**
 
 This tool aggregates syscall latency directly in the kernel and reports:
 
-- Call count
-- Average latency
-- Maximum latency
+-   Process ID (PID)
+-   Call count
+-   Average latency
+-   Maximum latency
 
 It focuses purely on syscall latency instead of full stack profiling.
 
----
+------------------------------------------------------------------------
 
 ## Architecture
 
 This tool uses:
 
-- eBPF (BCC)
-- kprobe / kretprobe
-- In-kernel hash maps for aggregation
+-   eBPF (BCC)
+-   kprobe / kretprobe
+-   In-kernel hash maps for aggregation
 
 Latency is measured using:
 
@@ -36,13 +38,14 @@ Latency is measured using:
 
 Measurement pattern:
 
-1. kprobe (syscall entry)
-   - Store timestamp in `start` map
-2. kretprobe (syscall exit)
-   - Calculate latency delta
-   - Update aggregated statistics in `stats` map
+1.  kprobe (syscall entry)
+    -   Store timestamp and syscall ID in `start` map
+2.  kretprobe (syscall exit)
+    -   Calculate latency delta
+    -   Update aggregated statistics in `stats` map (keyed by syscall +
+        PID)
 
----
+------------------------------------------------------------------------
 
 ## Data Flow
 
@@ -54,11 +57,11 @@ Measurement pattern:
             ↓
          BPF Maps
             ↓
-       Aggregated Output
+       Aggregated Output (on Ctrl+C)
 
 All aggregation happens inside the kernel to minimize overhead.
 
----
+------------------------------------------------------------------------
 
 ## BPF Maps
 
@@ -66,25 +69,37 @@ All aggregation happens inside the kernel to minimize overhead.
 
 Temporary map storing the start time of in-flight syscalls.
 
-| Key       | Value            |
-|-----------|------------------|
-| pid_tgid  | start time (ns)  |
-
-`pid_tgid` ensures correct behavior for multi-threaded processes.
-
----
-
-### stats
-
-Aggregated statistics per syscall.
-
-| Key        | Value                          |
-|------------|--------------------------------|
-| syscall ID | count, total_ns, max_ns        |
+  Key        Value
+  ---------- ---------------------------
+  pid_tgid   { timestamp, syscall ID }
 
 Structure:
 
-```c
+``` c
+struct start_t {
+    u64 ts;
+    u32 id;
+};
+```
+
+------------------------------------------------------------------------
+
+### stats
+
+Aggregated statistics per **(syscall ID, PID)**.
+
+  Key                   Value
+  --------------------- -------------------------
+  { syscall ID, PID }   count, total_ns, max_ns
+
+Structures:
+
+``` c
+struct key_t {
+    u32 id;
+    u32 pid;
+};
+
 struct stats_t {
     u64 count;
     u64 total_ns;
@@ -92,85 +107,33 @@ struct stats_t {
 };
 ```
 
----
+------------------------------------------------------------------------
 
 ## Example Output
 
-```
-ID     COUNT      AVG(us)      MAX(us)
-0      120394     3.42         182.00
-1      50432      2.10         50.00
-74     120        23000.00     120000.00
-```
+    read
+    ------------------------------------------------------------
+    PID        COUNT      AVG(us)      MAX(us)
+    1616       10         4.42         5.19
+    1400       24         7.65         48.52
+    1644       10         3096369.70   30963645.22
 
-Where:
-
-- COUNT = number of calls
-- AVG(us) = average latency in microseconds
-- MAX(us) = maximum observed latency
-
----
-
-## Environment
-
-Tested on:
-
-- Amazon Linux 2023
-- Kernel 6.x
-- BCC
-
----
+------------------------------------------------------------------------
 
 ## Installation
 
-```
-sudo dnf install -y bcc python3-bcc kernel-devel clang llvm
-```
+    sudo dnf install -y bcc python3-bcc kernel-devel clang llvm
 
----
+------------------------------------------------------------------------
 
 ## Usage
 
-```
-sudo python3 syscall_latency.py
-```
+    sudo python3 syscall_latency.py
 
 Press `Ctrl+C` to print aggregated statistics.
 
----
-
-## Why This Is Lightweight
-
-- Uses kprobe/kretprobe (low overhead)
-- No per-event user-space communication
-- All aggregation happens inside the kernel
-- Only summary is printed at exit
-
-Compared to `perf`, this produces significantly less noise and focuses purely on syscall latency.
-
----
-
-## Limitations
-
-- Currently probes selected syscalls (e.g., read)
-- Not container-aware
-- Not CO-RE based
-- No histogram (only average and max)
-
----
-
-## Future Improvements
-
-- Attach to all syscalls dynamically
-- Add PID filtering
-- Add error-rate tracking (ret < 0)
-- Add latency histogram (log2 buckets)
-- Add container / cgroup support
-- Port to Go + libbpf (CO-RE)
-
----
+------------------------------------------------------------------------
 
 ## License
 
-MIT License (recommended)
-
+MIT License
