@@ -22,7 +22,7 @@ struct start_t {
 BPF_HASH(start, u64, struct start_t);
 BPF_HASH(stats, u32, struct stats_t);
 
-int trace_enter(struct pt_regs *ctx, u32 id)
+static int trace_enter(struct pt_regs *ctx, u32 id)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
@@ -32,6 +32,22 @@ int trace_enter(struct pt_regs *ctx, u32 id)
 
     start.update(&pid_tgid, &s);
     return 0;
+}
+
+int trace_enter_read(struct pt_regs *ctx) {
+    return trace_enter(ctx, 0);
+}
+
+int trace_enter_write(struct pt_regs *ctx) {
+    return trace_enter(ctx, 1);
+}
+
+int trace_enter_openat(struct pt_regs *ctx) {
+    return trace_enter(ctx, 2);
+}
+
+int trace_enter_fsync(struct pt_regs *ctx) {
+    return trace_enter(ctx, 3);
 }
 
 int trace_exit(struct pt_regs *ctx)
@@ -60,7 +76,6 @@ int trace_exit(struct pt_regs *ctx)
 
 b = BPF(text=bpf_program)
 
-# 監視するsyscall一覧
 SYSCALLS = {
     "read": 0,
     "write": 1,
@@ -68,22 +83,25 @@ SYSCALLS = {
     "fsync": 3,
 }
 
-for name, sid in SYSCALLS.items():
+for name in SYSCALLS.keys():
     fn = f"__x64_sys_{name}"
-    b.attach_kprobe(event=fn, fn_name="trace_enter", args=[sid])
+    b.attach_kprobe(event=fn, fn_name=f"trace_enter_{name}")
     b.attach_kretprobe(event=fn, fn_name="trace_exit")
 
 print("Tracing syscalls... Ctrl+C to stop.")
 
 def print_stats():
     print("%-10s %-10s %-12s %-12s" % ("SYSCALL", "COUNT", "AVG(us)", "MAX(us)"))
+    stats = b["stats"]
+
     for name, sid in SYSCALLS.items():
-        stat = b["stats"].get(sid)
-        if stat:
-            avg = (stat.total_ns / stat.count) / 1000
-            max_us = stat.max_ns / 1000
+        key = stats.Key(sid)
+        if key in stats:
+            v = stats[key]
+            avg = (v.total_ns / v.count) / 1000
+            max_us = v.max_ns / 1000
             print("%-10s %-10d %-12.2f %-12.2f" %
-                  (name, stat.count, avg, max_us))
+                  (name, v.count, avg, max_us))
 
 def signal_handler(sig, frame):
     print("\n")
